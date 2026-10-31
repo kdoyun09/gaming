@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>로블록스 스타일 파쿠르 타워</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { overflow: hidden; background: #000; user-select: none; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        
+        /* UI HUD */
+        #hud {
+            position: absolute; top: 20px; left: 20px; color: white;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8); pointer-events: none;
+            font-size: 16px;
+        }
+        .stat-box { background: rgba(0, 0, 0, 0.4); padding: 10px 16px; border-radius: 12px; backdrop-filter: blur(5px); margin-bottom: 8px; border: 1px solid rgba(255,255,255,0.1); }
+        .stat-title { font-size: 12px; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
+        .stat-value { font-size: 22px; font-weight: bold; color: #4facfe; }
+
+        #controls-hint {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.6); color: white; padding: 10px 24px;
+            border-radius: 30px; font-size: 14px; backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.2); text-align: center; pointer-events: none;
+        }
+
+        #time-badge {
+            position: absolute; top: 20px; right: 20px;
+            background: rgba(0, 0, 0, 0.5); color: #ffd700; padding: 8px 16px;
+            border-radius: 20px; font-weight: bold; font-size: 14px; backdrop-filter: blur(5px);
+        }
+
+        #victory-modal {
+            display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(20, 20, 30, 0.95); color: white; padding: 30px 50px;
+            border-radius: 20px; text-align: center; border: 2px solid #00f2fe;
+            box-shadow: 0 0 30px rgba(0, 242, 254, 0.5);
+        }
+        #victory-modal h1 { font-size: 36px; color: #00f2fe; margin-bottom: 10px; }
+        #victory-modal button {
+            margin-top: 20px; padding: 12px 30px; background: linear-gradient(45deg, #00c6ff, #0072ff);
+            border: none; color: white; font-size: 16px; font-weight: bold; border-radius: 25px;
+            cursor: pointer; transition: 0.2s;
+        }
+        #victory-modal button:hover { transform: scale(1.05); }
+    </style>
+
+    <!-- Three.js Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+    <div id="canvas-container"></div>
+
+    <div id="hud">
+        <div class="stat-box">
+            <div class="stat-title">현재 높이</div>
+            <div class="stat-value" id="height-val">0 m</div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-title">체크포인트</div>
+            <div class="stat-value" id="checkpoint-val">시작 지점</div>
+        </div>
+    </div>
+
+    <div id="time-badge">☀️ 낮 시간</div>
+
+    <div id="controls-hint">
+        <b>[WASD / 방향키]</b> 이동 &nbsp;|&nbsp; <b>[Space]</b> 2단 점프 &nbsp;|&nbsp; <b>[마우스 드래그]</b> 카메라 회전
+    </div>
+
+    <div id="victory-modal">
+        <h1>🎉 타워 정복 완료! 🎉</h1>
+        <p>축하합니다! 파쿠르 타워 정상에 도달하셨습니다!</p>
+        <button onclick="restartGame()">다시 도전하기</button>
+    </div>
+
+    <script>
+        // --- 1. Scene, Camera, Renderer Setup ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0xa0c4ff, 0.008);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
+
+        // --- 2. Dynamic Environment (Sky, Sun, Moon, Stars) ---
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(50, 100, 50);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.near = 0.5;
+        dirLight.shadow.camera.far = 300;
+        const d = 40;
+        dirLight.shadow.camera.left = -d;
+        dirLight.shadow.camera.right = d;
+        dirLight.shadow.camera.top = d;
+        dirLight.shadow.camera.bottom = -d;
+        scene.add(dirLight);
+
+        // Sky Elements
+        const sunGeo = new THREE.SphereGeometry(6, 32, 32);
+        const sunMat = new THREE.MeshBasicMaterial({ color: 0xffdd44 });
+        const sunMesh = new THREE.Mesh(sunGeo, sunMat);
+        scene.add(sunMesh);
+
+        const moonGeo = new THREE.SphereGeometry(4, 32, 32);
+        const moonMat = new THREE.MeshBasicMaterial({ color: 0xeeffff });
+        const moonMesh = new THREE.Mesh(moonGeo, moonMat);
+        scene.add(moonMesh);
+
+        // Stars
+        const starGeo = new THREE.BufferGeometry();
+        const starCount = 600;
+        const starPositions = new Float32Array(starCount * 3);
+        for(let i=0; i<starCount*3; i+=3) {
+            starPositions[i] = (Math.random() - 0.5) * 600;
+            starPositions[i+1] = Math.random() * 300 + 50;
+            starPositions[i+2] = (Math.random() - 0.5) * 600;
+        }
+        starGeo.setAttribute('position', new THREE.BufferAttribute(starPositions, 3));
+        const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 1.2, transparent: true, opacity: 0 });
+        const starSystem = new THREE.Points(starGeo, starMat);
+        scene.add(starSystem);
+
+        // Cycle Management
+        let dayTime = 0; // 0 to 1 cycle
+        const dayDuration = 60; // Seconds per full day/night cycle
+
+        function updateEnvironment(delta) {
+            dayTime += delta / dayDuration;
+            if(dayTime > 1) dayTime -= 1;
+
+            const angle = dayTime * Math.PI * 2;
+            const radius = 180;
+            
+            // Orbit Sun and Moon
+            sunMesh.position.set(Math.cos(angle) * radius, Math.sin(angle) * radius, 0);
+            moonMesh.position.set(-Math.cos(angle) * radius, -Math.sin(angle) * radius, 0);
+
+            dirLight.position.copy(sunMesh.position);
+
+            // Sky Colors Transition
+            let skyColor, fogColor, badgeText;
+            const sunY = Math.sin(angle);
+
+            if (sunY > 0.2) { // Day
+                skyColor = new THREE.Color(0x70b5ff);
+                fogColor = new THREE.Color(0xa0c4ff);
+                badgeText = "☀️ 낮";
+                starMat.opacity = 0;
+                dirLight.intensity = 0.9;
+            } else if (sunY > -0.2) { // Sunset / Sunrise
+                skyColor = new THREE.Color(0xff6b4a);
+                fogColor = new THREE.Color(0xff9e79);
+                badgeText = "🌅 노을";
+                starMat.opacity = 0.3;
+                dirLight.intensity = 0.5;
+            } else { // Night
+                skyColor = new THREE.Color(0x0a0a1a);
+                fogColor = new THREE.Color(0x050510);
+                badgeText = "🌙 밤";
+                starMat.opacity = 0.9;
+                dirLight.intensity = 0.15;
+            }
+
+            renderer.setClearColor(skyColor);
+            scene.fog.color.copy(fogColor);
+            document.getElementById('time-badge').innerText = badgeText;
+        }
+
+        // --- 3. Rounded Roblox Style Character Setup ---
+        function createRoundedBoxGeometry(width, height, depth, radius, smoothness) {
+            const shape = new THREE.Shape();
+            const eps = 0.00001;
+            const radiusArc = radius - eps;
+            shape.absarc(width/2 - radiusArc, height/2 - radiusArc, radiusArc, 0, Math.PI/2, false);
+            shape.absarc(-width/2 + radiusArc, height/2 - radiusArc, radiusArc, Math.PI/2, Math.PI, false);
+            shape.absarc(-width/2 + radiusArc, -height/2 + radiusArc, radiusArc, Math.PI, Math.PI*3/2, false);
+            shape.absarc(width/2 - radiusArc, -height/2 + radiusArc, radiusArc, Math.PI*3/2, Math.PI*2, false);
+
+            const extrudeSettings = {
+                depth: depth - radius * 2,
+                bevelEnabled: true,
+                bevelSegments: smoothness * 2,
+                steps: 1,
+                bevelSize: radiusArc,
+                bevelThickness: radius,
+                curveSegments: smoothness
+            };
+
+            const geometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
+            geometry.center();
+            return geometry;
+        }
+
+        const characterGroup = new THREE.Group();
+        scene.add(characterGroup);
+
+        // Materials
+        const skinMat = new THREE.MeshStandardMaterial({ color: 0xffcc99, roughness: 0.4 });
+        const torsoMat = new THREE.MeshStandardMaterial({ color: 0x2288ff, roughness: 0.3 }); // Blue Shirt
+        const pantsMat = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.5 }); // Dark Pants
+        const eyeMat = new THREE.MeshBasicMaterial({ color: 0x111111 });
+        const whiteMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+        // Head (Rounded)
+        const headGeo = createRoundedBoxGeometry(0.7, 0.7, 0.7, 0.15, 3);
+        const headMesh = new THREE.Mesh(headGeo, skinMat);
+        headMesh.position.y = 1.35;
+        headMesh.castShadow = true;
+        characterGroup.add(headMesh);
+
+        // Eyes (Facing +Z Forward)
+        const eyeGeo = new THREE.SphereGeometry(0.08, 16, 16);
+        const pupilGeo = new THREE.SphereGeometry(0.04, 16, 16);
+
+        const leftEye = new THREE.Mesh(eyeGeo, whiteMat);
+        leftEye.position.set(0.15, 1.4, 0.35);
+        const leftPupil = new THREE.Mesh(pupilGeo, eyeMat);
+        leftPupil.position.set(0.15, 1.4, 0.41);
+
+        const rightEye = new THREE.Mesh(eyeGeo, whiteMat);
+        rightEye.position.set(-0.15, 1.4, 0.35);
+        const rightPupil = new THREE.Mesh(pupilGeo, eyeMat);
+        rightPupil.position.set(-0.15, 1.4, 0.41);
+
+        characterGroup.add(leftEye, leftPupil, rightEye, rightPupil);
+
+        // Torso
+        const torsoGeo = createRoundedBoxGeometry(0.8, 0.9, 0.45, 0.08, 2);
+        const torsoMesh = new THREE.Mesh(torsoGeo, torsoMat);
+        torsoMesh.position.y = 0.65;
+        torsoMesh.castShadow = true;
+        characterGroup.add(torsoMesh);
+
+        // Limbs setup with Pivots to Prevent Clipping
+        function createLimb(geo, mat, x, y, z) {
+            const pivot = new THREE.Group();
+            pivot.position.set(x, y, z);
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.y = -0.35; // Shift down so origin is at shoulder/hip joint
+            mesh.castShadow = true;
+            pivot.add(mesh);
+            characterGroup.add(pivot);
+            return pivot;
+        }
+
+        const armGeo = createRoundedBoxGeometry(0.3, 0.8, 0.3, 0.06, 2);
+        const legGeo = createRoundedBoxGeometry(0.32, 0.8, 0.32, 0.06, 2);
+
+        const leftArm = createLimb(armGeo, skinMat, 0.58, 1.0, 0);
+        const rightArm = createLimb(armGeo, skinMat, -0.58, 1.0, 0);
+        const leftLeg = createLimb(legGeo, pantsMat, 0.22, 0.35, 0);
+        const rightLeg = createLimb(legGeo, pantsMat, -0.22, 0.35, 0);
+
+        // --- 4. Parkour Tower Level Design ---
+        const platforms = [];
+        const movingObstacles = [];
+        const checkpoints = [];
+
+        // Base Ground
+        const groundGeo = new THREE.CylinderGeometry(20, 20, 2, 32);
+        const groundMat = new THREE.MeshStandardMaterial({ color: 0x44bb55, roughness: 0.8 });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.position.set(0, -1, 0);
+        ground.receiveShadow = true;
+        scene.add(ground);
+        platforms.push(ground);
+
+        checkpoints.push({ pos: new THREE.Vector3(0, 1, 0), name: "시작 지점", height: 0 });
+
+        // Tower Generator Setup
+        const colors = [0xff4757, 0xffa502, 0x2ed573, 0x1e90ff, 0x3742fa, 0x70a1ff];
+        let currentHeight = 2;
+        let currentAngle = 0;
+        const totalSteps = 45;
+
+        for (let i = 1; i <= totalSteps; i++) {
+            currentAngle += 0.45;
+            currentHeight += 2.2;
+            const radius = 12 + Math.sin(i * 0.3) * 3;
+
+            const x = Math.cos(currentAngle) * radius;
+            const z = Math.sin(currentAngle) * radius;
+
+            const color = colors[i % colors.length];
+            const mat = new THREE.MeshStandardMaterial({ color: color, roughness: 0.3, metalness: 0.1 });
+
+            let pGeo, pMesh;
+
+            if (i % 7 === 0) {
+                // Checkpoint Rest Platform
+                pGeo = new THREE.BoxGeometry(5, 0.8, 5);
+                pMesh = new THREE.Mesh(pGeo, mat);
+                pMesh.position.set(x, currentHeight, z);
+                
+                // Add Checkpoint Marker Flag
+                const flagGeo = new THREE.CylinderGeometry(0.1, 0.1, 3);
+                const flagMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+                const flag = new THREE.Mesh(flagGeo, flagMat);
+                flag.position.set(x, currentHeight + 1.9, z);
+                scene.add(flag);
+
+                checkpoints.push({ pos: new THREE.Vector3(x, currentHeight + 1.5, z), name: `${i}층 휴식처`, height: Math.round(currentHeight) });
+
+            } else if (i % 4 === 0) {
+                // Moving Obstacle Platform
+                pGeo = new THREE.BoxGeometry(3.5, 0.6, 3.5);
+                pMesh = new THREE.Mesh(pGeo, mat);
+                pMesh.position.set(x, currentHeight, z);
+                
+                movingObstacles.push({
+                    mesh: pMesh,
+                    baseX: x,
+                    baseZ: z,
+                    axis: i % 2 === 0 ? 'X' : 'Z',
+                    speed: 1.8 + Math.random(),
+                    range: 4
+                });
+
+            } else {
+                // Standard Jump Block
+                const size = Math.max(1.8, 3.2 - (i * 0.03)); // Gets slightly smaller higher up
+                pGeo = new THREE.BoxGeometry(size, 0.6, size);
+                pMesh = new THREE.Mesh(pGeo, mat);
+                pMesh.position.set(x, currentHeight, z);
+            }
+
+            pMesh.receiveShadow = true;
+            pMesh.castShadow = true;
+            scene.add(pMesh);
+            platforms.push(pMesh);
+        }
+
+        // Final Goal Top Platform
+        currentHeight += 3;
+        const goalGeo = new THREE.CylinderGeometry(6, 6, 1, 32);
+        const goalMat = new THREE.MeshStandardMaterial({ color: 0xffd700, metalness: 0.8, roughness: 0.2 });
+        const goalPlatform = new THREE.Mesh(goalGeo, goalMat);
+        goalPlatform.position.set(0, currentHeight, 0);
+        goalPlatform.receiveShadow = true;
+        scene.add(goalPlatform);
+        platforms.push(goalPlatform);
+
+        // Goal Trophy Graphic
+        const trophyGeo = new THREE.TorusknotGeometry(1.2, 0.3, 64, 16);
+        const trophyMat = new THREE.MeshBasicMaterial({ color: 0xffea00 });
+        const trophy = new THREE.Mesh(trophyGeo, trophyMat);
+        trophy.position.set(0, currentHeight + 3, 0);
+        scene.add(trophy);
+
+        let activeCheckpoint = checkpoints[0];
+
+        // --- 5. Controls & Physics State ---
+        const keys = {};
+        window.addEventListener('keydown', (e) => { keys[e.code] = true; });
+        window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+        // Mouse Drag Camera Rotation
+        let cameraAngleX = 0;
+        let cameraAngleY = 0.3;
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+
+        window.addEventListener('mousedown', (e) => { isDragging = true; });
+        window.addEventListener('mouseup', () => { isDragging = false; });
+        window.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                const deltaX = e.clientX - previousMousePosition.x;
+                const deltaY = e.clientY - previousMousePosition.y;
+
+                cameraAngleX -= deltaX * 0.008;
+                cameraAngleY = Math.max(0.05, Math.min(Math.PI / 2.2, cameraAngleY + deltaY * 0.008));
+            }
+            previousMousePosition = { x: e.clientX, y: e.clientY };
+        });
+
+        // Touch Support for Mobile
+        window.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                isDragging = true;
+                previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            }
+        });
+        window.addEventListener('touchend', () => { isDragging = false; });
+        window.addEventListener('touchmove', (e) => {
+            if (isDragging && e.touches.length === 1) {
+                const deltaX = e.touches[0].clientX - previousMousePosition.x;
+                const deltaY = e.touches[0].clientY - previousMousePosition.y;
+                cameraAngleX -= deltaX * 0.008;
+                cameraAngleY = Math.max(0.05, Math.min(Math.PI / 2.2, cameraAngleY + deltaY * 0.008));
+                previousMousePosition = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            }
+        });
+
+        // Player Variables
+        const playerPos = new THREE.Vector3(0, 2, 0);
+        const playerVelocity = new THREE.Vector3();
+        let isGrounded = false;
+        let jumpCount = 0;
+        const maxJumps = 2; // 2단 점프
+        const moveSpeed = 9;
+        const jumpForce = 12;
+        const gravity = -28;
+
+        let walkAnimTime = 0;
+
+        // --- 6. Main Game Loop ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = Math.min(clock.getDelta(), 0.1);
+            updateEnvironment(delta);
+
+            // Rotate Goal Trophy
+            trophy.rotation.y += delta * 1.5;
+
+            // Update Moving Obstacles
+            const time = clock.getElapsedTime();
+            movingObstacles.forEach(obs => {
+                if (obs.axis === 'X') {
+                    obs.mesh.position.x = obs.baseX + Math.sin(time * obs.speed) * obs.range;
+                } else {
+                    obs.mesh.position.z = obs.baseZ + Math.cos(time * obs.speed) * obs.range;
+                }
+            });
+
+            // Handle Input Vector Relative to Camera
+            const moveDir = new THREE.Vector3();
+            if (keys['KeyW'] || keys['ArrowUp']) moveDir.z -= 1;
+            if (keys['KeyS'] || keys['ArrowDown']) moveDir.z += 1;
+            if (keys['KeyA'] || keys['ArrowLeft']) moveDir.x -= 1;
+            if (keys['KeyD'] || keys['ArrowRight']) moveDir.x += 1;
+
+            moveDir.normalize();
+
+            // Transform movement relative to camera angle
+            const camForward = new THREE.Vector3(-Math.sin(cameraAngleX), 0, -Math.cos(cameraAngleX)).normalize();
+            const camRight = new THREE.Vector3(Math.cos(cameraAngleX), 0, -Math.sin(cameraAngleX)).normalize();
+
+            const targetVelocity = new THREE.Vector3()
+                .addScaledVector(camRight, moveDir.x)
+                .addScaledVector(camForward, -moveDir.z)
+                .multiplyScalar(moveSpeed);
+
+            playerVelocity.x = targetVelocity.x;
+            playerVelocity.z = targetVelocity.z;
+
+            // Double Jump Handling
+            if (keys['Space']) {
+                if (!keys.spacePressed) { // Prevent hold-repeat
+                    if (isGrounded || jumpCount < maxJumps) {
+                        playerVelocity.y = jumpForce;
+                        jumpCount++;
+                        isGrounded = false;
+                    }
+                    keys.spacePressed = true;
+                }
+            } else {
+                keys.spacePressed = false;
+            }
+
+            // Apply Gravity
+            playerVelocity.y += gravity * delta;
+
+            // Move Player
+            playerPos.addScaledVector(playerVelocity, delta);
+
+            // Collision Detection with Platforms
+            isGrounded = false;
+            const playerRadius = 0.4;
+            const playerHeight = 1.8;
+
+            for (let plat of platforms) {
+                const box = new THREE.Box3().setFromObject(plat);
+                
+                // Feet level check
+                if (playerPos.x + playerRadius > box.min.x && playerPos.x - playerRadius < box.max.x &&
+                    playerPos.z + playerRadius > box.min.z && playerPos.z - playerRadius < box.max.z) {
+                    
+                    if (playerPos.y >= box.max.y - 0.4 && playerPos.y + playerVelocity.y * delta <= box.max.y) {
+                        playerPos.y = box.max.y;
+                        playerVelocity.y = 0;
+                        isGrounded = true;
+                        jumpCount = 0;
+                        break;
+                    }
+                }
+            }
+
+            // Respawn Fall Boundary Check
+            if (playerPos.y < -15) {
+                respawn();
+            }
+
+            // Update Character Group Position & Smooth Rotation
+            characterGroup.position.copy(playerPos);
+
+            const isMoving = (Math.abs(playerVelocity.x) > 0.5 || Math.abs(playerVelocity.z) > 0.5);
+            if (isMoving) {
+                const targetRotation = Math.atan2(playerVelocity.x, playerVelocity.z);
+                // Smooth Y rotation towards movement direction
+                let diff = targetRotation - characterGroup.rotation.y;
+                while (diff < -Math.PI) diff += Math.PI * 2;
+                while (diff > Math.PI) diff -= Math.PI * 2;
+                characterGroup.rotation.y += diff * 0.2;
+
+                // Natural Walking Animation (Pivoted Limbs)
+                walkAnimTime += delta * 12;
+                const swing = Math.sin(walkAnimTime) * 0.6;
+                leftArm.rotation.x = swing;
+                rightArm.rotation.x = -swing;
+                leftLeg.rotation.x = -swing;
+                rightLeg.rotation.x = swing;
+            } else {
+                // Reset Pose
+                leftArm.rotation.x *= 0.8;
+                rightArm.rotation.x *= 0.8;
+                leftLeg.rotation.x *= 0.8;
+                rightLeg.rotation.x *= 0.8;
+            }
+
+            // Check Checkpoints Activation
+            checkpoints.forEach(cp => {
+                if (playerPos.distanceTo(cp.pos) < 3.5) {
+                    if (activeCheckpoint !== cp) {
+                        activeCheckpoint = cp;
+                        document.getElementById('checkpoint-val').innerText = cp.name;
+                    }
+                }
+            });
+
+            // Victory Check
+            if (playerPos.y >= currentHeight - 0.5 && Math.abs(playerPos.x) < 4 && Math.abs(playerPos.z) < 4) {
+                document.getElementById('victory-modal').style.display = 'block';
+            }
+
+            // Orbit Camera Positioning
+            const camDistance = 8.5;
+            camera.position.x = playerPos.x + Math.sin(cameraAngleX) * Math.cos(cameraAngleY) * camDistance;
+            camera.position.y = playerPos.y + Math.sin(cameraAngleY) * camDistance + 1.2;
+            camera.position.z = playerPos.z + Math.cos(cameraAngleX) * Math.cos(cameraAngleY) * camDistance;
+            camera.lookAt(playerPos.x, playerPos.y + 1.2, playerPos.z);
+
+            // Update UI HUD
+            document.getElementById('height-val').innerText = `${Math.max(0, Math.round(playerPos.y))} m`;
+
+            renderer.render(scene, camera);
+        }
+
+        function respawn() {
+            playerPos.copy(activeCheckpoint.pos);
+            playerVelocity.set(0, 0, 0);
+        }
+
+        function restartGame() {
+            document.getElementById('victory-modal').style.display = 'none';
+            activeCheckpoint = checkpoints[0];
+            document.getElementById('checkpoint-val').innerText = checkpoints[0].name;
+            respawn();
+        }
+
+        // Window Resize Listener
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start Loop
+        animate();
+    </script>
+</body>
+</html>
