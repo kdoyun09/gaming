@@ -354,7 +354,7 @@
         platforms.push(goalPlatform);
 
         // Goal Trophy Graphic
-        const trophyGeo = new THREE.TorusknotGeometry(1.2, 0.3, 64, 16);
+        const trophyGeo = new THREE.TorusKnotGeometry(1.2, 0.3, 64, 16);
         const trophyMat = new THREE.MeshBasicMaterial({ color: 0xffea00 });
         const trophy = new THREE.Mesh(trophyGeo, trophyMat);
         trophy.position.set(0, currentHeight + 3, 0);
